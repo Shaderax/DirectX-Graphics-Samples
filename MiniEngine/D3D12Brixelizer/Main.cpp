@@ -44,16 +44,88 @@ private:
 
 CREATE_APPLICATION( D3D12Brixelizer )
 
+void ChangeIBLSet(EngineVar::ActionType);
+void ChangeIBLBias(EngineVar::ActionType);
+
+DynamicEnumVar g_IBLSet("Viewer/Lighting/Environment", ChangeIBLSet);
+std::vector<std::pair<TextureRef, TextureRef>> g_IBLTextures;
+NumVar g_IBLBias("Viewer/Lighting/Gloss Reduction", 2.0f, 0.0f, 10.0f, 1.0f, ChangeIBLBias);
+
+void ChangeIBLSet(EngineVar::ActionType)
+{
+    int setIdx = g_IBLSet - 1;
+    if (setIdx < 0)
+    {
+        Renderer::SetIBLTextures(nullptr, nullptr);
+    }
+    else
+    {
+        auto texturePair = g_IBLTextures[setIdx];
+        Renderer::SetIBLTextures(texturePair.first, texturePair.second);
+    }
+}
+
+void ChangeIBLBias(EngineVar::ActionType)
+{
+    Renderer::SetIBLBias(g_IBLBias);
+}
+
+#include <direct.h> // for _getcwd() to check data root path
+
+void LoadIBLTextures()
+{
+    char CWD[256];
+    _getcwd(CWD, 256);
+
+    Utility::Printf("Loading IBL environment maps\n");
+
+    WIN32_FIND_DATA ffd;
+    HANDLE hFind = FindFirstFile(L"../ModelViewer/Textures/*_diffuseIBL.dds", &ffd);
+
+    g_IBLSet.AddEnum(L"None");
+
+    if (hFind != INVALID_HANDLE_VALUE) do
+    {
+        if (ffd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+            continue;
+
+        std::wstring diffuseFile = ffd.cFileName;
+        std::wstring baseFile = diffuseFile;
+        baseFile.resize(baseFile.rfind(L"_diffuseIBL.dds"));
+        std::wstring specularFile = baseFile + L"_specularIBL.dds";
+
+        TextureRef diffuseTex = TextureManager::LoadDDSFromFile(L"../ModelViewer/Textures/" + diffuseFile);
+        if (diffuseTex.IsValid())
+        {
+            TextureRef specularTex = TextureManager::LoadDDSFromFile(L"../ModelViewer/Textures/" + specularFile);
+            if (specularTex.IsValid())
+            {
+                g_IBLSet.AddEnum(baseFile);
+                g_IBLTextures.push_back(std::make_pair(diffuseTex, specularTex));
+            }
+        }
+    } while (FindNextFile(hFind, &ffd) != 0);
+
+    FindClose(hFind);
+
+    Utility::Printf("Found %u IBL environment map sets\n", g_IBLTextures.size());
+
+    if (g_IBLTextures.size() > 0)
+        g_IBLSet.Increment();
+}
+
 void D3D12Brixelizer::Startup( void )
 {
-    MotionBlur::Enable = false;
-    TemporalEffects::EnableTAA = false;
+    MotionBlur::Enable = true;
+    TemporalEffects::EnableTAA = true;
     FXAA::Enable = false;
-    PostEffects::EnableHDR = false;
-    PostEffects::EnableAdaptation = false;
-    SSAO::Enable = false;
+    PostEffects::EnableHDR = true;
+    PostEffects::EnableAdaptation = true;
+    SSAO::Enable = true;
 
     Renderer::Initialize();
+
+    LoadIBLTextures();
 
     //ModelInst = Renderer::LoadModel(std::wstring(L"Assets/MiniatureNightCity.glb"), false);
     //ModelInst.LoopAllAnimations();
@@ -69,11 +141,9 @@ void D3D12Brixelizer::Startup( void )
     CameraController.reset(new FlyingFPSCamera(Camera, Vector3(kYUnitVector)));
 
     // Setup your data
-    GraphicsContext& gfxContext = GraphicsContext::Begin(L"Build Acceleration Structures");
-
-    ComPtr<ID3D12GraphicsCommandList4> CommandList;
-    gfxContext.GetCommandList()->QueryInterface(IID_PPV_ARGS(&CommandList));
-
+    //GraphicsContext& gfxContext = GraphicsContext::Begin(L"Build Acceleration Structures");
+    //ComPtr<ID3D12GraphicsCommandList4> CommandList;
+    //gfxContext.GetCommandList()->QueryInterface(IID_PPV_ARGS(&CommandList));
     //LoadAssets(CommandList);
 }
 
@@ -150,6 +220,7 @@ void D3D12Brixelizer::Update( float deltaT )
 
     gfxContext.Finish();
 
+    TemporalEffects::GetJitterOffset(MainViewport.TopLeftX, MainViewport.TopLeftY);
 
     MainViewport.Width = (float)g_SceneColorBuffer.GetWidth();
     MainViewport.Height = (float)g_SceneColorBuffer.GetHeight();
@@ -165,6 +236,7 @@ void D3D12Brixelizer::Update( float deltaT )
 
 void D3D12Brixelizer::RenderScene( void )
 {
+    uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();
     const D3D12_VIEWPORT& viewport = MainViewport;
     const D3D12_RECT& scissor = MainScissor;
 
@@ -204,53 +276,76 @@ void D3D12Brixelizer::RenderScene( void )
 
     sorter.Sort();
 
-    {
-        ScopedTimer _prof(L"Depth Pre-Pass", gfxContext);
-        sorter.RenderMeshes(MeshSorter::kZPass, gfxContext, globals);
-    }
+	{
+		ScopedTimer _prof(L"Depth Pre-Pass", gfxContext);
+		sorter.RenderMeshes(MeshSorter::kZPass, gfxContext, globals);
+	}
+
+	SSAO::Render(gfxContext, Camera);
+
+	if (!SSAO::DebugDraw)
+	{
+		ScopedTimer _outerprof(L"Main Render", gfxContext);
+
+		{
+			ScopedTimer _prof(L"Sun Shadow Map", gfxContext);
+
+			MeshSorter shadowSorter(MeshSorter::kShadows);
+			shadowSorter.SetCamera(SunShadowCamera);
+			shadowSorter.SetDepthStencilTarget(g_ShadowBuffer);
+
+			ModelInst.Render(shadowSorter);
+
+			shadowSorter.Sort();
+			shadowSorter.RenderMeshes(MeshSorter::kZPass, gfxContext, globals);
+		}
+
+		gfxContext.TransitionResource(g_SceneColorBuffer, D3D12_RESOURCE_STATE_RENDER_TARGET, true);
+		gfxContext.ClearColor(g_SceneColorBuffer);
+
+		{
+			ScopedTimer _prof(L"Render Color", gfxContext);
+
+			gfxContext.TransitionResource(g_SSAOFullScreen, D3D12_RESOURCE_STATE_PIXEL_SHADER_RESOURCE);
+			gfxContext.TransitionResource(g_SceneDepthBuffer, D3D12_RESOURCE_STATE_DEPTH_READ);
+			gfxContext.SetRenderTarget(g_SceneColorBuffer.GetRTV(), g_SceneDepthBuffer.GetDSV_DepthReadOnly());
+			gfxContext.SetViewportAndScissor(viewport, scissor);
+
+			sorter.RenderMeshes(MeshSorter::kOpaque, gfxContext, globals);
+		}
+
+		Renderer::DrawSkybox(gfxContext, Camera, viewport, scissor);
+
+		sorter.RenderMeshes(MeshSorter::kTransparent, gfxContext, globals);
+	}
+	// Some systems generate a per-pixel velocity buffer to better track dynamic and skinned meshes.  Everything
+	// is static in our scene, so we generate velocity from camera motion and the depth buffer.  A velocity buffer
+	// is necessary for all temporal effects (and motion blur).
+	MotionBlur::GenerateCameraVelocityBuffer(gfxContext, Camera, true);
+
+	TemporalEffects::ResolveImage(gfxContext);
+
+	ParticleEffectManager::Render(gfxContext, Camera, g_SceneColorBuffer, g_SceneDepthBuffer, g_LinearDepth[FrameIndex]);
+
+	// Until I work out how to couple these two, it's "either-or".
+	if (DepthOfField::Enable)
+		DepthOfField::Render(gfxContext, Camera.GetNearClip(), Camera.GetFarClip());
+	else
+		MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
 
-    SSAO::Render(gfxContext, Camera);
+	gfxContext.Finish();
 
+	/*
+	ID3D12GraphicsCommandList* CommandList = gfxContext.GetCommandList();
+	// Rendering something
+	PIXBeginEvent(CommandList, 0, L"Draw cities");
+			CommandList->SetPipelineState(pPso1);
 
-    // Some systems generate a per-pixel velocity buffer to better track dynamic and skinned meshes.  Everything
-    // is static in our scene, so we generate velocity from camera motion and the depth buffer.  A velocity buffer
-    // is necessary for all temporal effects (and motion blur).
-    MotionBlur::GenerateCameraVelocityBuffer(gfxContext, Camera, true);
+			pCommandList->SetGraphicsRootDescriptorTable(2, cbvSrvHandle);
+			cbvSrvHandle.Offset(cbvSrvDescriptorSize);
 
-    TemporalEffects::ResolveImage(gfxContext);
-
-    // Until I work out how to couple these two, it's "either-or".
-    if (DepthOfField::Enable)
-        DepthOfField::Render(gfxContext, Camera.GetNearClip(), Camera.GetFarClip());
-    else
-        MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
-
-
-
-
-
-    gfxContext.Finish();
-
-
-
-    /*
-    ID3D12GraphicsCommandList* CommandList = gfxContext.GetCommandList();
-    // Rendering something
-    PIXBeginEvent(CommandList, 0, L"Draw cities");
-            CommandList->SetPipelineState(pPso1);
-
-            pCommandList->SetGraphicsRootDescriptorTable(2, cbvSrvHandle);
-            cbvSrvHandle.Offset(cbvSrvDescriptorSize);
-
-            pCommandList->DrawIndexedInstanced(numIndices, 1, 0, 0, 0);
-    PIXEndEvent(CommandList);
-    */
-
-
-
-
-
-
-
+			pCommandList->DrawIndexedInstanced(numIndices, 1, 0, 0, 0);
+	PIXEndEvent(CommandList);
+	*/
 }
