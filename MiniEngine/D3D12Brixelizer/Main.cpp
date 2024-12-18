@@ -1,3 +1,4 @@
+
 #include "Brixelizer.h"
 
 #define UFBX_NO_INDEX_GENERATION
@@ -40,7 +41,18 @@ private:
 
     ComPtr<ID3D12Resource> VertexBuffer;
     D3D12_VERTEX_BUFFER_VIEW VertexBufferView;
+
+    RootSignature ComputeRootSig;
+
+
+    // Debug
+    ColorBuffer T3d;
+    //ComPtr<ID3D12Resource> T3d;
+    //D3D12_CPU_DESCRIPTOR_HANDLE T3d_SRV;
+
 };
+   
+ComputePSO ComputeCS_PSO(L"Compute CS");
 
 CREATE_APPLICATION( D3D12Brixelizer )
 
@@ -127,9 +139,18 @@ void D3D12Brixelizer::Startup( void )
 
     LoadIBLTextures();
 
-    //ModelInst = Renderer::LoadModel(std::wstring(L"Assets/MiniatureNightCity.glb"), false);
-    //ModelInst.LoopAllAnimations();
-    //ModelInst.Resize(10.0f);
+    Microsoft::WRL::ComPtr<ID3DBlob> bloob = CompileShader(L"Shaders/EmitSDFCS.hlsl", nullptr, "main", "cs_5_1");
+    
+    ComputeRootSig.Reset(3, 0);
+    ComputeRootSig[0].InitAsConstantBuffer(0);
+    ComputeRootSig[1].InitAsDescriptorRange(D3D12_DESCRIPTOR_RANGE_TYPE_SRV, 0, 1);
+    ComputeRootSig[2].InitAsDescriptorRange(D3D12_DESCRIPTOR_RANGE_TYPE_UAV, 0, 1);
+    ComputeRootSig.Finalize(L"FillLightRS");
+
+    ComputeCS_PSO.SetRootSignature(ComputeRootSig);
+    ComputeCS_PSO.SetComputeShader(bloob->GetBufferPointer(), bloob->GetBufferSize());
+    ComputeCS_PSO.Finalize();
+
     ModelInst = Renderer::LoadModel(L"../ModelViewer/Sponza/PBR/sponza2.gltf", false);
     ModelInst.Resize(100.0f * ModelInst.GetRadius());
     OrientedBox obb = ModelInst.GetBoundingBox();
@@ -145,6 +166,13 @@ void D3D12Brixelizer::Startup( void )
     //ComPtr<ID3D12GraphicsCommandList4> CommandList;
     //gfxContext.GetCommandList()->QueryInterface(IID_PPV_ARGS(&CommandList));
     //LoadAssets(CommandList);
+
+
+    // Create T3d
+    {
+        // Tex 3D -> 2D = 64*64*64=262144  -> sqrt(262144)=512
+        T3d.Create(L"SDF", 512, 512, 0, DXGI_FORMAT_R16_FLOAT);
+    }
 }
 
 void D3D12Brixelizer::Cleanup( void )
@@ -240,6 +268,28 @@ void D3D12Brixelizer::RenderScene( void )
     const D3D12_VIEWPORT& viewport = MainViewport;
     const D3D12_RECT& scissor = MainScissor;
 
+    // Compute Dispatch
+    {
+        ComputeContext& CmpContext = ComputeContext::Begin(L"Compute");
+
+        struct CSConstants
+        {
+            Math::Vector3 Center;
+        } vsConstants;
+        vsConstants.Center = Camera.GetPosition();
+
+        CmpContext.SetRootSignature(ComputeRootSig);
+        CmpContext.SetPipelineState(ComputeCS_PSO);
+
+        //CmpContext.SetDynamicDescriptor(0, 0, T3d.GetUAV());
+        //ModelInst.GetModel()
+        //CmpContext.SetDynamicConstantBufferView(Renderer::kMeshConstants, sizeof(vsConstants), &vsConstants);
+
+        CmpContext.Dispatch(1, 1, 1);
+
+        CmpContext.Finish();
+    }
+
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Render");
 
     // Update global constants
@@ -283,6 +333,7 @@ void D3D12Brixelizer::RenderScene( void )
 
 	SSAO::Render(gfxContext, Camera);
 
+    // Main Render
 	if (!SSAO::DebugDraw)
 	{
 		ScopedTimer _outerprof(L"Main Render", gfxContext);

@@ -26,6 +26,8 @@
 #include "glTF.h"
 #include "Renderer.h"
 #include "Display.h"
+#include "D3DCompiler.h"
+#include "DXSampleHelper.h"
 
 struct Vertex
 {
