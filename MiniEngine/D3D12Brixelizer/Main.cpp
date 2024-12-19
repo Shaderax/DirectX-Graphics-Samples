@@ -24,8 +24,6 @@ public:
     virtual void Startup( void ) override;
     virtual void Cleanup( void ) override;
 
-    void LoadAssets(ComPtr<ID3D12GraphicsCommandList4>& CommandList);
-
     virtual void Update( float deltaT ) override;
     virtual void RenderScene( void ) override;
 
@@ -44,12 +42,9 @@ private:
 
     RootSignature ComputeRootSig;
 
-
     // Debug
     ColorBuffer T3d;
-    //ComPtr<ID3D12Resource> T3d;
-    //D3D12_CPU_DESCRIPTOR_HANDLE T3d_SRV;
-
+    StructuredBuffer buf;
 };
    
 ComputePSO ComputeCS_PSO(L"Compute CS");
@@ -161,78 +156,52 @@ void D3D12Brixelizer::Startup( void )
     Camera.SetZRange(1.0f, 10000.0f);
     CameraController.reset(new FlyingFPSCamera(Camera, Vector3(kYUnitVector)));
 
-    // Setup your data
-    //GraphicsContext& gfxContext = GraphicsContext::Begin(L"Build Acceleration Structures");
-    //ComPtr<ID3D12GraphicsCommandList4> CommandList;
-    //gfxContext.GetCommandList()->QueryInterface(IID_PPV_ARGS(&CommandList));
-    //LoadAssets(CommandList);
-
-
     // Create T3d
     {
         // Tex 3D -> 2D = 64*64*64=262144  -> sqrt(262144)=512
         T3d.Create(L"SDF", 512, 512, 0, DXGI_FORMAT_R16_FLOAT);
+        buf.Create(L"Oui", 1, 12);
+    }
+
+    // Compute Dispatch
+    {
+        ComputeContext& CmpContext = ComputeContext::Begin(L"Compute");
+
+        __declspec(align(16)) struct Vertex
+        {
+            XMFLOAT3 Position;
+            XMFLOAT3 Normal;
+        };
+
+        __declspec(align(16)) struct CSConstants
+        {
+            XMFLOAT3 Center;
+            uint32_t NumTriangles;
+        } csConstants;
+        csConstants.Center = XMFLOAT3(Camera.GetPosition().GetX(), Camera.GetPosition().GetY(), Camera.GetPosition().GetZ());
+        csConstants.NumTriangles = ModelInst.GetModel()->m_DataBuffer.GetBufferSize() / (sizeof(Vertex) * 3);
+
+        CmpContext.SetRootSignature(ComputeRootSig);
+        CmpContext.SetPipelineState(ComputeCS_PSO);
+
+        CmpContext.SetDynamicConstantBufferView(0, sizeof(CSConstants), &csConstants);
+        CmpContext.SetDynamicDescriptor(1, 0, ModelInst.GetModel()->m_DataBuffer.GetSRV());
+        CmpContext.SetDynamicDescriptor(2, 0, T3d.GetUAV());
+
+        CmpContext.Dispatch(16, 16, 1);
+
+        CmpContext.Finish();
     }
 }
 
 void D3D12Brixelizer::Cleanup( void )
 {
     ModelInst = nullptr;
+    T3d.Destroy();
+    buf.Destroy();
 
     // Free up resources in an orderly fashion
     Renderer::Shutdown();
-}
-
-void D3D12Brixelizer::LoadAssets(ComPtr<ID3D12GraphicsCommandList4>& CommandList)
-{
-    ComPtr<ID3D12Resource> VertexBufferUploadHeap;
-
-    ufbx_load_opts opts = { 0 }; // Optional, pass NULL for defaults
-    ufbx_error error; // Optional, pass NULL if you don't care about errors
-    ufbx_scene* scene = ufbx_load_file("Assets/MiniatureNightCity.fbx", &opts, &error);
-    if (!scene) {
-        fprintf(stderr, "Failed to load: %s\n", error.description.data);
-    }
-
-    UINT num_vertices = (UINT)scene->meshes[0]->num_vertices;
-
-    g_Device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
-        D3D12_HEAP_FLAG_NONE,
-        &CD3DX12_RESOURCE_DESC::Buffer(num_vertices * sizeof(XMFLOAT3)),
-        D3D12_RESOURCE_STATE_COPY_DEST,
-        nullptr,
-        IID_PPV_ARGS(&VertexBuffer));
-
-    g_Device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_UPLOAD),
-        D3D12_HEAP_FLAG_NONE,
-        &CD3DX12_RESOURCE_DESC::Buffer(sizeof(XMFLOAT3)),
-        D3D12_RESOURCE_STATE_GENERIC_READ,
-        nullptr,
-        IID_PPV_ARGS(&VertexBufferUploadHeap));
-
-    XMFLOAT3* vertices = new XMFLOAT3[num_vertices];
-
-    D3D12_SUBRESOURCE_DATA vertexData = {};
-    for (size_t i = 0; i < num_vertices; i++)
-    {
-        vertices[i].x = ufbx_get_vertex_vec3(&scene->meshes[0]->vertex_position, i).x;
-        vertices[i].y = ufbx_get_vertex_vec3(&scene->meshes[0]->vertex_position, i).y;
-        vertices[i].x = ufbx_get_vertex_vec3(&scene->meshes[0]->vertex_position, i).z;
-    }
-
-    vertexData.pData = vertices;
-    vertexData.RowPitch = sizeof(XMFLOAT3);
-    vertexData.SlicePitch = vertexData.RowPitch;
-
-    UpdateSubresources<1>(CommandList.Get(), VertexBuffer.Get(), VertexBufferUploadHeap.Get(), 0, 0, 1, &vertexData);
-    CommandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(VertexBuffer.Get(), D3D12_RESOURCE_STATE_COPY_DEST, D3D12_RESOURCE_STATE_VERTEX_AND_CONSTANT_BUFFER));
-
-    // Initialize the vertex buffer view.
-    VertexBufferView.BufferLocation = VertexBuffer->GetGPUVirtualAddress();
-    VertexBufferView.StrideInBytes = sizeof(XMFLOAT3);
-    VertexBufferView.SizeInBytes = num_vertices * sizeof(XMFLOAT3);
 }
 
 void D3D12Brixelizer::Update( float deltaT )
@@ -267,28 +236,6 @@ void D3D12Brixelizer::RenderScene( void )
     uint32_t FrameIndex = TemporalEffects::GetFrameIndexMod2();
     const D3D12_VIEWPORT& viewport = MainViewport;
     const D3D12_RECT& scissor = MainScissor;
-
-    // Compute Dispatch
-    {
-        ComputeContext& CmpContext = ComputeContext::Begin(L"Compute");
-
-        struct CSConstants
-        {
-            Math::Vector3 Center;
-        } vsConstants;
-        vsConstants.Center = Camera.GetPosition();
-
-        CmpContext.SetRootSignature(ComputeRootSig);
-        CmpContext.SetPipelineState(ComputeCS_PSO);
-
-        //CmpContext.SetDynamicDescriptor(0, 0, T3d.GetUAV());
-        //ModelInst.GetModel()
-        //CmpContext.SetDynamicConstantBufferView(Renderer::kMeshConstants, sizeof(vsConstants), &vsConstants);
-
-        CmpContext.Dispatch(1, 1, 1);
-
-        CmpContext.Finish();
-    }
 
     GraphicsContext& gfxContext = GraphicsContext::Begin(L"Scene Render");
 
