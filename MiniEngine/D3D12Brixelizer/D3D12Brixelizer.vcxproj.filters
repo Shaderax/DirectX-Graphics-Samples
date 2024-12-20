@@ -24,6 +24,9 @@
     <ClCompile Include="ufbx.c">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="SDF.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="pch.h" />
@@ -34,6 +37,9 @@
       <Filter>Header Files</Filter>
     </ClInclude>
     <ClInclude Include="DXSampleHelper.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
+    <ClInclude Include="SDF.h">
       <Filter>Header Files</Filter>
     </ClInclude>
   </ItemGroup>
@@ -62,6 +68,12 @@
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="Shaders\EmitSDFCS.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\SDFDrawDebugPS.hlsl">
+      <Filter>Shaders</Filter>
+    </FxCompile>
+    <FxCompile Include="Shaders\SDFDrawDebugVS.hlsl">
       <Filter>Shaders</Filter>
     </FxCompile>
   </ItemGroup>

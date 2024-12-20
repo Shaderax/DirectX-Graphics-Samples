@@ -57,6 +57,7 @@
     <ClInclude Include="Brixelizer.h" />
     <ClInclude Include="DXSampleHelper.h" />
     <ClInclude Include="pch.h" />
+    <ClInclude Include="SDF.h" />
     <ClInclude Include="ufbx.h" />
   </ItemGroup>
   <ItemGroup>
@@ -64,6 +65,7 @@
     <ClCompile Include="pch.cpp">
       <PrecompiledHeader>Create</PrecompiledHeader>
     </ClCompile>
+    <ClCompile Include="SDF.cpp" />
     <ClCompile Include="ufbx.c" />
   </ItemGroup>
   <ItemGroup>
@@ -86,6 +88,12 @@
   </ItemGroup>
   <ItemGroup>
     <FxCompile Include="Shaders\EmitSDFCS.hlsl" />
+    <FxCompile Include="Shaders\SDFDrawDebugPS.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Pixel</ShaderType>
+    </FxCompile>
+    <FxCompile Include="Shaders\SDFDrawDebugVS.hlsl">
+      <ShaderType Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">Vertex</ShaderType>
+    </FxCompile>
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ItemDefinitionGroup>

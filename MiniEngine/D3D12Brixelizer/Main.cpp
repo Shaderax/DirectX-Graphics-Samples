@@ -1,9 +1,5 @@
-
 #include "Brixelizer.h"
-
-#define UFBX_NO_INDEX_GENERATION
-
-#include "ufbx.h"
+#include "SDF.h"
 
 using namespace GameCore;
 using namespace Graphics;
@@ -188,7 +184,7 @@ void D3D12Brixelizer::Startup( void )
         CmpContext.SetDynamicDescriptor(1, 0, ModelInst.GetModel()->m_DataBuffer.GetSRV());
         CmpContext.SetDynamicDescriptor(2, 0, T3d.GetUAV());
 
-        CmpContext.Dispatch(16, 16, 1);
+        CmpContext.Dispatch(1024, 1, 1);
 
         CmpContext.Finish();
     }
@@ -331,19 +327,5 @@ void D3D12Brixelizer::RenderScene( void )
 	else
 		MotionBlur::RenderObjectBlur(gfxContext, g_VelocityBuffer);
 
-
 	gfxContext.Finish();
-
-	/*
-	ID3D12GraphicsCommandList* CommandList = gfxContext.GetCommandList();
-	// Rendering something
-	PIXBeginEvent(CommandList, 0, L"Draw cities");
-			CommandList->SetPipelineState(pPso1);
-
-			pCommandList->SetGraphicsRootDescriptorTable(2, cbvSrvHandle);
-			cbvSrvHandle.Offset(cbvSrvDescriptorSize);
-
-			pCommandList->DrawIndexedInstanced(numIndices, 1, 0, 0, 0);
-	PIXEndEvent(CommandList);
-	*/
 }

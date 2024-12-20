@@ -58,7 +58,7 @@ cbuffer CSConstants : register(b0)
 
 StructuredBuffer<Vertex> TrianglesBuffer : register(t0);
 
-float FindClosestTriangle(uint3 VoxelPos, uint GI)
+float FindClosestTriangle(uint3 VoxelPos)
 {
     uint ClosestTriangleID = 0;
     float ClosestDistance = FLT_MAX;
@@ -82,6 +82,28 @@ float FindClosestTriangle(uint3 VoxelPos, uint GI)
     return ClosestDistance;
 }
 
+uint2 Get2dPos(uint id)
+{
+    uint X = id % 512;
+    
+    uint tX = id / 512;
+    uint Y = tX;// % 512;
+    
+    return uint2(X, Y);
+}
+
+uint3 Get3dPos(uint id)
+{
+    uint X = id % 64;
+    
+    uint tX = id / 64;
+    uint Y = tX % 64;
+
+    uint Z = tX / 4096;
+
+    return uint3(X, Y, Z);
+}
+
 RWTexture2D<float> depthTex : register(u0);
 
 #define _RootSig \
@@ -90,19 +112,22 @@ RWTexture2D<float> depthTex : register(u0);
     "DescriptorTable(SRV(t0, numDescriptors = 1))," \
     "DescriptorTable(UAV(u0, numDescriptors = 1))"
 
+//[numthreads(32, 32, 1)]
 [RootSignature(_RootSig)]
-[numthreads(32, 32, 1)]
+[numthreads(256, 1, 1)]
 void main(
-    uint2 Gid : SV_GroupID,
-    uint2 GTid : SV_GroupThreadID,
+    uint2 Gid : SV_GroupID, // id du thread groupe
+    uint2 GTid : SV_GroupThreadID, // id du thread dans le thread group
     uint GI : SV_GroupIndex,
     uint3 DTid : SV_DispatchThreadID)
 {
-    uint3 VoxelPos = uint3(GTid.x, Gid);
-    uint X = Gid.x * 32 + GTid.x;
-    uint Y = Gid.y * 32 + GTid.y;
-    uint2 TexPos2D = uint2(X, Y);
+    uint3 VoxelPos = Get3dPos(DTid.x);
+    uint2 TexPos2D = Get2dPos(DTid.x);
+
+//    uint X = Gid.x * 32 + GTid.x;
+//    uint Y = Gid.y * 32 + GTid.y;
+//    uint2 TexPos2D = uint2(X, Y);
 
     // Find closest Triangle
-    depthTex[TexPos2D] = GTid.y; // FindClosestTriangle(VoxelPos, GI);
+    depthTex[TexPos2D] = FindClosestTriangle(VoxelPos);
 }
